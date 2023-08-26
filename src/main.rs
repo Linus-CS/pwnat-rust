@@ -39,10 +39,13 @@ fn write_icmp_header(icmp_type: Icmpv4Type, buffer: &mut &mut [u8]) -> Result<()
     Ok(())
 }
 
-async fn ping(sink: &mut tokio::io::WriteHalf<tokio_tun::Tun>) -> Result<(), PacketError> {
+async fn ping(
+    sink: &mut tokio::io::WriteHalf<tokio_tun::Tun>,
+    host: [u8; 4],
+) -> Result<(), PacketError> {
     let mut buffer = [0; 1500];
     let mut buf_slice = &mut buffer[..];
-    write_ip_header([192, 168, 0, 3], [3, 3, 3, 3], 8, &mut buf_slice)?;
+    write_ip_header([192, 168, 0, 3], host, 8, &mut buf_slice)?;
     write_icmp_header(
         Icmpv4Type::EchoRequest(IcmpEchoHeader { id: 0, seq: 0 }),
         &mut buf_slice,
@@ -51,7 +54,7 @@ async fn ping(sink: &mut tokio::io::WriteHalf<tokio_tun::Tun>) -> Result<(), Pac
     let unwritten = buf_slice.len();
     let complete = &buffer[..buffer.len() - unwritten];
     sink.write_all(complete).await.unwrap();
-    println!("Send ICMP Echo to 3.3.3.3");
+    println!("Send ICMP Echo to {host:?}");
     Ok(())
 }
 
@@ -118,7 +121,7 @@ async fn main() {
             let mut interval = time::interval(Duration::from_millis(250));
             loop {
                 interval.tick().await;
-                ping(&mut sink).await.unwrap();
+                ping(&mut sink, [195, 90, 213, 214]).await.unwrap();
             }
         })
     };
