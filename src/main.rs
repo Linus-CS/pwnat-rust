@@ -1,4 +1,4 @@
-use std::{env, process::Command, time::Duration};
+use std::{env, io::Write, net::Ipv4Addr, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     time,
@@ -6,7 +6,7 @@ use tokio::{
 use tokio_tun::Tun;
 
 use etherparse::{
-    ip_number, IcmpEchoHeader, Icmpv4Header, Icmpv4Type, Ipv4Header, Ipv4HeaderSlice,
+    ip_number, IcmpEchoHeader, Icmpv4Header, Icmpv4Type, Ipv4Header, Ipv4HeaderSlice, UdpHeader,
 };
 
 #[derive(Debug)]
@@ -84,26 +84,42 @@ async fn time_exceeded(
     Ok(())
 }
 
-fn setup_viface(name: &str) {
-    Command::new("ip")
-        .args(["addr", "add", "dev", name, "192.168.0.1/24"])
-        .spawn()
-        .unwrap()
-        .wait()
-        .unwrap();
+async fn udp(sink: &mut tokio::io::WriteHalf<tokio_tun::Tun>) -> Result<(), PacketError> {
+    let mut ip_header =
+        Ipv4Header::new(0, 64, ip_number::UDP, [192, 168, 0, 3], [192, 168, 178, 21]);
+
+    ip_header
+        .set_payload_len(8 + 5)
+        .map_err(|_| PacketError::PayloadLengthToBig)?;
+
+    let payload = [1, 2, 3, 4, 5];
+    let udp_header = UdpHeader::with_ipv4_checksum(3478, 799, &ip_header, &payload).unwrap();
+    let mut buffer = [0; 20 + 8 + 5];
+    let mut slice = &mut buffer[..];
+
+    ip_header.write(&mut slice);
+    udp_header.write(&mut slice);
+    slice.write_all(&payload);
+
+    sink.write_all(&buffer).await;
+    Ok(())
 }
 
 #[tokio::main]
 async fn main() {
+    // https://unix.stackexchange.com/questions/588938/how-to-relay-traffic-from-tun-to-internet to relay tun traffic to internet
     let args: Vec<String> = env::args().collect();
     let tun = Tun::builder()
         .name("tun0")
+        .address(Ipv4Addr::new(10, 168, 0, 1))
+        .netmask(Ipv4Addr::new(255, 255, 255, 0))
+        // .destination(Ipv4Addr::new(192, 168, 178, 21))
         .packet_info(false)
         .up()
         .try_build()
         .unwrap();
 
-    setup_viface("tun0");
+    // setup_viface("tun0");
     let (mut stream, mut sink) = tokio::io::split(tun);
 
     let pinging = if args.len() > 1 && args[1] == "-c" {
@@ -121,7 +137,8 @@ async fn main() {
             let mut interval = time::interval(Duration::from_millis(250));
             loop {
                 interval.tick().await;
-                ping(&mut sink, [195, 90, 213, 214]).await.unwrap();
+                // ping(&mut sink, [195, 90, 213, 214]).await.unwrap();
+                udp(&mut sink).await.unwrap();
             }
         })
     };
@@ -134,6 +151,7 @@ async fn main() {
                 Ok(iph) => {
                     let src = iph.source_addr();
                     let proto = iph.protocol();
+                    println!("Received {proto} Packet from {src}");
 
                     if proto == 1 {
                         println!("Received ICMP Packet from {src}");
