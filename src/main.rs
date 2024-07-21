@@ -195,7 +195,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     if args.is_client {
         let remote = args.remote.expect("Checked during parsing");
         let builder1 = PacketBuilder::ipv4(local, remote, 64).icmpv4_raw(11, 0, [0; 4]);
-        let builder2 = PacketBuilder::ipv4(remote, [3, 3, 3, 3], 1).icmpv4_echo_request(0, 0);
+        let builder2 =
+            PacketBuilder::ipv4([10, 0, 0, 2], [3, 3, 3, 3], 1).icmpv4_echo_request(0, 0);
         let mut packet = Vec::<u8>::with_capacity(builder1.size(builder2.size(0)));
         let mut inner = Vec::<u8>::with_capacity(builder2.size(0));
         builder2.write(&mut inner, &[]).unwrap();
