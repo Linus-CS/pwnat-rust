@@ -193,7 +193,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     };
 
     if args.is_client {
-        let remote = args.remote.expect("Checked during parsing");
+        let remote = args.remote.expect("Checked during parsing!");
         let builder1 = PacketBuilder::ipv4(local, remote, 64).icmpv4_raw(11, 0, [0; 4]);
         let builder2 = PacketBuilder::ipv4(remote, [3, 3, 3, 3], 1).icmpv4_echo_request(0, 0);
         let mut packet = Vec::<u8>::with_capacity(builder1.size(builder2.size(0)));
@@ -206,7 +206,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         loop {
             let n = tun.send(&packet).await?;
             println!("send {n} bytes!");
-            thread::sleep(Duration::from_millis(1000));
+            thread::sleep(Duration::from_millis(100));
         }
     } else {
         let builder =
@@ -218,9 +218,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let mut buffer = [0; 1500];
         let n = tun.send(&packet).await?;
         println!("send {n} bytes!");
-        loop {
-            let n = tun.recv(&mut buffer).await.unwrap();
-            println!("{:?}", &buffer[..n]);
+        for _ in 0..10000 {
+            let n = tun.send(&packet).await?;
+            println!("send {n} bytes!");
+            // let n = tun.recv(&mut buffer).await.unwrap();
+            // println!("{:?}", &buffer[..n]);
         }
     };
 
