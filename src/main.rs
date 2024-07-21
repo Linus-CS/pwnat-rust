@@ -200,19 +200,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
         builder1.write(&mut packet, &inner).unwrap();
 
         println!("packet \n{packet:?}");
-    } else {
-        let builder =
-            PacketBuilder::ipv4([10, 0, 0, 2], [5, 5, 5, 5], 20).icmpv4_echo_request(0, 0);
-        let mut packet = Vec::<u8>::with_capacity(builder.size(0));
-        builder.write(&mut packet, "test".as_bytes()).unwrap();
-
         let n = tun.send(&packet).await?;
         println!("send {n} bytes!");
+    } else {
+        let builder =
+            PacketBuilder::ipv4([10, 0, 0, 2], [5, 5, 5, 5], 10).icmpv4_echo_request(0, 0);
+        let mut packet = Vec::<u8>::with_capacity(builder.size(0));
+        builder.write(&mut packet, &[]).unwrap();
 
         let mut buffer = [0; 1500];
-        let _ = tun.recv(&mut buffer).await.unwrap();
-        let n = tun.recv(&mut buffer).await.unwrap();
-        println!("{:?}", &buffer[..n]);
+        loop {
+            let n = tun.send(&packet).await?;
+            println!("send {n} bytes!");
+            let n = tun.recv(&mut buffer).await.unwrap();
+            println!("{:?}", &buffer[..n]);
+        }
     };
 
     remove_iptable_entries()?;
