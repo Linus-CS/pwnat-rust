@@ -5,6 +5,8 @@ use std::{
     error::Error,
     net::{IpAddr, Ipv4Addr},
     process::Command,
+    thread,
+    time::Duration,
 };
 use tokio_tun::Tun;
 
@@ -200,8 +202,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         builder1.write(&mut packet, &inner).unwrap();
 
         println!("packet \n{packet:?}");
-        let n = tun.send(&packet).await?;
-        println!("send {n} bytes!");
+        loop {
+            let n = tun.send(&packet).await?;
+            println!("send {n} bytes!");
+            thread::sleep(Duration::from_millis(100));
+        }
     } else {
         let builder =
             PacketBuilder::ipv4([10, 0, 0, 2], [5, 5, 5, 5], 10).icmpv4_echo_request(0, 0);
