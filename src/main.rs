@@ -194,12 +194,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     if args.is_client {
         let remote = args.remote.expect("Checked during parsing");
-        let builder1 = PacketBuilder::ipv4(local, remote, u8::MAX).icmpv4_raw(11, 0, [0; 4]);
-        let builder2 = PacketBuilder::ipv4(remote, [5, 5, 5, 5], 1).icmpv4_echo_request(0, 0);
+        let builder1 = PacketBuilder::ipv4(local, remote, 64).icmpv4_raw(11, 0, [0; 4]);
+        let builder2 = PacketBuilder::ipv4(remote, [3, 3, 3, 3], 1).icmpv4_echo_request(0, 0);
         let mut packet = Vec::<u8>::with_capacity(builder1.size(builder2.size(0)));
         let mut inner = Vec::<u8>::with_capacity(builder2.size(0));
         builder2.write(&mut inner, &[]).unwrap();
         builder1.write(&mut packet, &inner).unwrap();
+        packet[6] = 0;
 
         println!("packet \n{packet:?}");
         loop {
@@ -209,14 +210,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     } else {
         let builder =
-            PacketBuilder::ipv4([10, 0, 0, 2], [5, 5, 5, 5], 10).icmpv4_echo_request(0, 0);
+            PacketBuilder::ipv4([10, 0, 0, 2], [3, 3, 3, 3], 64).icmpv4_echo_request(0, 0);
         let mut packet = Vec::<u8>::with_capacity(builder.size(0));
         builder.write(&mut packet, &[]).unwrap();
 
+        println!("packet \n{packet:?}");
         let mut buffer = [0; 1500];
+        let n = tun.send(&packet).await?;
+        println!("send {n} bytes!");
         loop {
-            let n = tun.send(&packet).await?;
-            println!("send {n} bytes!");
             let n = tun.recv(&mut buffer).await.unwrap();
             println!("{:?}", &buffer[..n]);
         }
@@ -240,9 +242,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
 // iptables -D FORWARD -i wlo1 -d 10.0.0.0/24 -m state --state ESTABLISHED,RELATED -j ACCEPT
 // iptables -t nat -D POSTROUTING -s 10.0.0.1/24 -o wlo1 -j MASQUERADE
 
-// [69, 0, 0, 56,| 0, 0, 0, 0,| 253, 1, 125, 123,| 62, 155, 247, 172,| 10, 0, 0, 2,|| 11, 0, 251, 6, 0, 0, 0, 0, || 69, 0, 0, 28, |0, 0, 64, 0,| 1, 1, 214, 172|, 10, 0, 0, 2,| 195, 90, 213, 214,|| 8, 0, 241, 124, 0, 0, 0, 0]
-//  ---------------------------IPv4-Header-----------------------------------------||------------ICMP------------||-----------------------------original-IPv4-Header------------------------------||----------original-ICMP------
-//                                                                                                                 [69, 0, 0, 28, |0, 0, 64, 0,| 3, 1, 212, 172|, 10, 0, 0, 2,| 195, 90, 213, 214,|| 8, 0, 241, 124, 0, 0, 0, 0]
-//                                                                                                                                               ^      ^----^
-//                                                                                                                                              TTL  Header Checksum
+// [69, 0, 0, 56,| 0, 0, 0, 0,| 255, 1, 253, 205,| 192, 168, 178, 21,| 79, 216, 187, 96,|| 11, 0, 244, 255, 0, 0, 0, 0,|| 69, 0, 0, 28,| 0, 0, 64, 0,| 1, 1, 104, 163,| 79, 216, 187, 96,| 3, 3, 3, 3,|| 8, 0, 247, 255, 0, 0, 0, 0]
+// [69, 0, 0, 56,| 0, 0, 0, 0,| 253, 1, 125, 123,| 62, 155, 247, 172,| 10, 0, 0, 2,|| 11, 0, 244, 255, 0, 0, 0, 0,|| 69, 0, 0, 28,| 0, 0, 64, 0,| 1, 1, 214, 174|, 10, 0, 0, 2,| 195, 90, 213, 214,|| 8, 0, 247, 255, 0, 0, 0, 0]
+//  ---------------------------IPv4-Header-----------------------------------------||------------ICMP-------------||-----------------------------original-IPv4-Header------------------------------||----------original-ICMP----
+//                                                                                                                  [69, 0, 0, 28,| 0, 0, 64, 0,| 3, 1, 212, 174|, 10, 0, 0, 2,| 195, 90, 213, 214,|| 8, 0, 247, 255, 0, 0, 0, 0]
+//                                                                                                                                                ^      ^----^
+//                                                                                                                                               TTL  Header Checksum
 //[69, 0, 0, 28, 0, 0, 64, 0, 1, 1, 251, 234, 192, 168, 178, 21, 79, 216, 187, 96, 11, 0, 244, 255, 0, 0, 0, 0]
