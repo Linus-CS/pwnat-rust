@@ -191,11 +191,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     };
 
     if args.is_client {
-        let builder1 =
-            PacketBuilder::ipv4(local, args.remote.expect("Checked during parsing"), u8::MAX)
-                .icmpv4_raw(11, 0, [0; 4]);
-        let builder2 =
-            PacketBuilder::ipv4([10, 0, 0, 2], [5, 5, 5, 5], 1).icmpv4_echo_request(0, 0);
+        let remote = args.remote.expect("Checked during parsing");
+        let builder1 = PacketBuilder::ipv4(local, remote, u8::MAX).icmpv4_raw(11, 0, [0; 4]);
+        let builder2 = PacketBuilder::ipv4(remote, [5, 5, 5, 5], 1).icmpv4_echo_request(0, 0);
         let mut packet = Vec::<u8>::with_capacity(builder1.size(builder2.size(0)));
         let mut inner = Vec::<u8>::with_capacity(builder2.size(0));
         builder2.write(&mut inner, &[]).unwrap();
@@ -203,9 +201,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         println!("packet \n{packet:?}");
     } else {
-        let builder = PacketBuilder::ipv4([10, 0, 0, 2], [5, 5, 5, 5], 3).icmpv4_echo_request(0, 0);
+        let builder =
+            PacketBuilder::ipv4([10, 0, 0, 2], [5, 5, 5, 5], 20).icmpv4_echo_request(0, 0);
         let mut packet = Vec::<u8>::with_capacity(builder.size(0));
-        builder.write(&mut packet, &[]).unwrap();
+        builder.write(&mut packet, "test".as_bytes()).unwrap();
 
         let n = tun.send(&packet).await?;
         println!("send {n} bytes!");
