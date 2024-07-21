@@ -1,169 +1,242 @@
-use std::{env, io::Write, net::Ipv4Addr, time::Duration};
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    time,
+use etherparse::PacketBuilder;
+use local_ip_address::local_ip;
+use std::{
+    env::{self},
+    error::Error,
+    net::{IpAddr, Ipv4Addr},
+    process::Command,
 };
 use tokio_tun::Tun;
 
-use etherparse::{
-    ip_number, IcmpEchoHeader, Icmpv4Header, Icmpv4Type, Ipv4Header, Ipv4HeaderSlice, UdpHeader,
-};
+fn setup_iface() -> Result<Tun, Box<dyn Error>> {
+    let tun_name = "p2p";
+    let tun = Tun::builder()
+        .name(tun_name)
+        .address(Ipv4Addr::new(10, 0, 0, 1))
+        .netmask(Ipv4Addr::new(255, 255, 255, 0))
+        .packet_info(false)
+        .up()
+        .try_build()?;
 
-#[derive(Debug)]
-enum PacketError {
-    PayloadLengthToBig,
-    CouldNotWriteHeader,
+    Ok(tun)
 }
 
-fn write_ip_header(
-    src: [u8; 4],
-    dest: [u8; 4],
-    size: usize,
-    buffer: &mut &mut [u8],
-) -> Result<(), PacketError> {
-    let mut ip_header = Ipv4Header::new(0, 64, ip_number::ICMP, src, dest);
-    ip_header
-        .set_payload_len(size)
-        .map_err(|_| PacketError::PayloadLengthToBig)?;
-    ip_header
-        .write(buffer)
-        .map_err(|_| PacketError::CouldNotWriteHeader)?;
+fn setup_iptable_entries() -> Result<(), Box<dyn Error>> {
+    Command::new("iptables")
+        .arg("-A")
+        .arg("FORWARD")
+        .arg("-s")
+        .arg("10.0.0.0/24")
+        .arg("-o")
+        .arg("wlo1")
+        .arg("-j")
+        .arg("ACCEPT")
+        .status()?;
+
+    Command::new("iptables")
+        .arg("-A")
+        .arg("FORWARD")
+        .arg("-i")
+        .arg("wlo1")
+        .arg("-d")
+        .arg("10.0.0.0/24")
+        .arg("-m")
+        .arg("state")
+        .arg("--state")
+        .arg("ESTABLISHED,RELATED")
+        .arg("-j")
+        .arg("ACCEPT")
+        .status()?;
+
+    Command::new("iptables")
+        .arg("-t")
+        .arg("nat")
+        .arg("-A")
+        .arg("POSTROUTING")
+        .arg("-s")
+        .arg("10.0.0.0/24")
+        .arg("-o")
+        .arg("wlo1")
+        .arg("-j")
+        .arg("MASQUERADE")
+        .status()?;
+
     Ok(())
 }
 
-fn write_icmp_header(icmp_type: Icmpv4Type, buffer: &mut &mut [u8]) -> Result<(), PacketError> {
-    let icmp_header = Icmpv4Header::new(icmp_type);
-    icmp_header
-        .write(buffer)
-        .map_err(|_| PacketError::CouldNotWriteHeader)?;
+fn remove_iptable_entries() -> Result<(), Box<dyn Error>> {
+    Command::new("iptables")
+        .arg("-D")
+        .arg("FORWARD")
+        .arg("-s")
+        .arg("10.0.0.0/24")
+        .arg("-o")
+        .arg("wlo1")
+        .arg("-j")
+        .arg("ACCEPT")
+        .status()?;
+
+    Command::new("iptables")
+        .arg("-D")
+        .arg("FORWARD")
+        .arg("-i")
+        .arg("wlo1")
+        .arg("-d")
+        .arg("10.0.0.0/24")
+        .arg("-m")
+        .arg("state")
+        .arg("--state")
+        .arg("ESTABLISHED,RELATED")
+        .arg("-j")
+        .arg("ACCEPT")
+        .status()?;
+
+    Command::new("iptables")
+        .arg("-t")
+        .arg("nat")
+        .arg("-D")
+        .arg("POSTROUTING")
+        .arg("-s")
+        .arg("10.0.0.0/24")
+        .arg("-o")
+        .arg("wlo1")
+        .arg("-j")
+        .arg("MASQUERADE")
+        .status()?;
+
     Ok(())
 }
 
-async fn ping(
-    sink: &mut tokio::io::WriteHalf<tokio_tun::Tun>,
-    host: [u8; 4],
-) -> Result<(), PacketError> {
-    let mut buffer = [0; 1500];
-    let mut buf_slice = &mut buffer[..];
-    write_ip_header([192, 168, 0, 3], host, 8, &mut buf_slice)?;
-    write_icmp_header(
-        Icmpv4Type::EchoRequest(IcmpEchoHeader { id: 0, seq: 0 }),
-        &mut buf_slice,
-    )?;
-
-    let unwritten = buf_slice.len();
-    let complete = &buffer[..buffer.len() - unwritten];
-    sink.write_all(complete).await.unwrap();
-    println!("Send ICMP Echo to {host:?}");
-    Ok(())
+struct CmdArguments {
+    is_client: bool,
+    remote: Option<[u8; 4]>,
+}
+enum ParsingError {
+    UnsupportedArgument(String),
+    IPv4Parsing,
+    MissingRemote,
 }
 
-async fn time_exceeded(
-    sink: &mut tokio::io::WriteHalf<tokio_tun::Tun>,
-    src: [u8; 4],
-    host: [u8; 4],
-) -> Result<(), PacketError> {
-    let mut buffer: [u8; 1500] = [0; 1500];
-    let mut buf_slice = &mut buffer[..];
-    write_ip_header(src, host, 8 + 20 + 8, &mut buf_slice)?;
-    write_icmp_header(
-        Icmpv4Type::TimeExceeded(etherparse::icmpv4::TimeExceededCode::TtlExceededInTransit),
-        &mut buf_slice,
-    )?;
+impl TryFrom<Vec<String>> for CmdArguments {
+    type Error = ParsingError;
 
-    write_ip_header(src, host, 8, &mut buf_slice)?;
-    write_icmp_header(
-        Icmpv4Type::EchoRequest(IcmpEchoHeader { id: 0, seq: 0 }),
-        &mut buf_slice,
-    )?;
-
-    let unwritten = buf_slice.len();
-    let complete = &buffer[..buffer.len() - unwritten];
-    sink.write_all(complete).await.unwrap();
-    println!("Send ICMP TimeExceeded to {host:?}");
-    Ok(())
-}
-
-async fn udp(sink: &mut tokio::io::WriteHalf<tokio_tun::Tun>) -> Result<(), PacketError> {
-    let mut ip_header =
-        Ipv4Header::new(0, 64, ip_number::UDP, [192, 168, 0, 3], [192, 168, 178, 21]);
-
-    ip_header
-        .set_payload_len(8 + 5)
-        .map_err(|_| PacketError::PayloadLengthToBig)?;
-
-    let payload = [1, 2, 3, 4, 5];
-    let udp_header = UdpHeader::with_ipv4_checksum(3478, 799, &ip_header, &payload).unwrap();
-    let mut buffer = [0; 20 + 8 + 5];
-    let mut slice = &mut buffer[..];
-
-    ip_header.write(&mut slice);
-    udp_header.write(&mut slice);
-    slice.write_all(&payload);
-
-    sink.write_all(&buffer).await;
-    Ok(())
+    fn try_from(mut args: Vec<String>) -> Result<Self, Self::Error> {
+        let mut ans = CmdArguments {
+            is_client: false,
+            remote: None,
+        };
+        args = args[1..].to_vec();
+        let mut check_remote = false;
+        for arg in args {
+            if check_remote {
+                let address: Vec<&str> = arg.split('.').collect();
+                if address.len() != 4 {
+                    return Err(ParsingError::IPv4Parsing);
+                }
+                let mut values = [0; 4];
+                for (i, value) in address.iter().enumerate() {
+                    values[i] = value.parse().map_err(|_| ParsingError::IPv4Parsing)?;
+                }
+                ans.remote = Some(values);
+                check_remote = false;
+                continue;
+            }
+            match arg.as_str() {
+                "-c" => ans.is_client = true,
+                "--remote" | "-R" => check_remote = true,
+                a => return Err(ParsingError::UnsupportedArgument(a.to_owned())),
+            }
+        }
+        if ans.is_client && ans.remote.is_none() {
+            return Err(ParsingError::MissingRemote);
+        }
+        Ok(ans)
+    }
 }
 
 #[tokio::main]
-async fn main() {
-    // https://unix.stackexchange.com/questions/588938/how-to-relay-traffic-from-tun-to-internet to relay tun traffic to internet
+async fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().collect();
-    let tun = Tun::builder()
-        .name("tun0")
-        .address(Ipv4Addr::new(10, 168, 0, 1))
-        .netmask(Ipv4Addr::new(255, 255, 255, 0))
-        // .destination(Ipv4Addr::new(192, 168, 178, 21))
-        .packet_info(false)
-        .up()
-        .try_build()
-        .unwrap();
+    let args = match CmdArguments::try_from(args) {
+        Ok(value) => Some(value),
+        Err(e) => {
+            match e {
+                ParsingError::IPv4Parsing => println!(
+                    "Could not parse the provided ip use a.b.c.d with a-d between 0 and 255"
+                ),
+                ParsingError::UnsupportedArgument(arg) => {
+                    println!("Unsupported argument: {arg}")
+                }
 
-    // setup_viface("tun0");
-    let (mut stream, mut sink) = tokio::io::split(tun);
+                ParsingError::MissingRemote => println!(
+                    "Client needs to provide remote ip. Use --remote to set remote ip address."
+                ),
+            };
 
-    let pinging = if args.len() > 1 && args[1] == "-c" {
-        tokio::spawn(async move {
-            let mut interval = time::interval(Duration::from_millis(250));
-            loop {
-                interval.tick().await;
-                time_exceeded(&mut sink, [195, 90, 213, 214], [192, 168, 0, 3])
-                    .await
-                    .unwrap();
-            }
-        })
-    } else {
-        tokio::spawn(async move {
-            let mut interval = time::interval(Duration::from_millis(250));
-            loop {
-                interval.tick().await;
-                // ping(&mut sink, [195, 90, 213, 214]).await.unwrap();
-                udp(&mut sink).await.unwrap();
-            }
-        })
+            None
+        }
     };
 
-    let listening = tokio::spawn(async move {
-        loop {
-            let mut buf = [0u8; 1500];
-            let n = stream.read(&mut buf).await.unwrap();
-            match Ipv4HeaderSlice::from_slice(&buf[..n]) {
-                Ok(iph) => {
-                    let src = iph.source_addr();
-                    let proto = iph.protocol();
-                    println!("Received {proto} Packet from {src}");
+    if args.is_none() {
+        return Ok(());
+    }
+    let args = args.expect("Errors where already handled!");
 
-                    if proto == 1 {
-                        println!("Received ICMP Packet from {src}");
-                    }
-                }
-                Err(etherparse::ReadError::Ipv4UnexpectedVersion(6)) => {}
-                Err(e) => {
-                    eprintln!("ignoring weird packet {:?}", e);
-                }
-            }
-        }
-    });
+    let tun = setup_iface()?;
+    setup_iptable_entries()?;
+    let local = if let Ok(IpAddr::V4(ipv4)) = local_ip() {
+        ipv4.octets()
+    } else {
+        return Ok(());
+    };
 
-    futures::future::join_all(vec![pinging, listening]).await;
+    if args.is_client {
+        let builder1 =
+            PacketBuilder::ipv4(local, args.remote.expect("Checked during parsing"), u8::MAX)
+                .icmpv4_raw(11, 0, [0; 4]);
+        let builder2 =
+            PacketBuilder::ipv4([10, 0, 0, 2], [5, 5, 5, 5], 1).icmpv4_echo_request(0, 0);
+        let mut packet = Vec::<u8>::with_capacity(builder1.size(builder2.size(0)));
+        let mut inner = Vec::<u8>::with_capacity(builder2.size(0));
+        builder2.write(&mut inner, &[]).unwrap();
+        builder1.write(&mut packet, &inner).unwrap();
+
+        println!("packet \n{packet:?}");
+    } else {
+        let builder = PacketBuilder::ipv4([10, 0, 0, 2], [5, 5, 5, 5], 3).icmpv4_echo_request(0, 0);
+        let mut packet = Vec::<u8>::with_capacity(builder.size(0));
+        builder.write(&mut packet, &[]).unwrap();
+
+        let n = tun.send(&packet).await?;
+        println!("send {n} bytes!");
+
+        let mut buffer = [0; 1500];
+        let _ = tun.recv(&mut buffer).await.unwrap();
+        let n = tun.recv(&mut buffer).await.unwrap();
+        println!("{:?}", &buffer[..n]);
+    };
+
+    remove_iptable_entries()?;
+
+    Ok(())
 }
+
+// sysctl -w net.ipv4.ip_forward=1 or
+// echo 1 > /proc/sys/net/ipv4/ip_forward
+
+// CREATE
+// iptables -A FORWARD -s 10.0.0.0/24 -o wlo1 -j ACCEPT
+// iptables -A FORWARD -i wlo1 -d 10.0.0.0/24 -m state --state ESTABLISHED,RELATED -j ACCEPT
+// iptables -t nat -A POSTROUTING -s 10.0.0.1/24 -o wlo1 -j MASQUERADE
+
+// DELETE
+// iptables -D FORWARD -s 10.0.0.0/24 -o wlo1 -j ACCEPT
+// iptables -D FORWARD -i wlo1 -d 10.0.0.0/24 -m state --state ESTABLISHED,RELATED -j ACCEPT
+// iptables -t nat -D POSTROUTING -s 10.0.0.1/24 -o wlo1 -j MASQUERADE
+
+// [69, 0, 0, 56,| 0, 0, 0, 0,| 253, 1, 125, 123,| 62, 155, 247, 172,| 10, 0, 0, 2,|| 11, 0, 251, 6, 0, 0, 0, 0, || 69, 0, 0, 28, |0, 0, 64, 0,| 1, 1, 214, 172|, 10, 0, 0, 2,| 195, 90, 213, 214,|| 8, 0, 241, 124, 0, 0, 0, 0]
+//  ---------------------------IPv4-Header-----------------------------------------||------------ICMP------------||-----------------------------original-IPv4-Header------------------------------||----------original-ICMP------
+//                                                                                                                 [69, 0, 0, 28, |0, 0, 64, 0,| 3, 1, 212, 172|, 10, 0, 0, 2,| 195, 90, 213, 214,|| 8, 0, 241, 124, 0, 0, 0, 0]
+//                                                                                                                                               ^      ^----^
+//                                                                                                                                              TTL  Header Checksum
+//[69, 0, 0, 28, 0, 0, 64, 0, 1, 1, 251, 234, 192, 168, 178, 21, 79, 216, 187, 96, 11, 0, 244, 255, 0, 0, 0, 0]

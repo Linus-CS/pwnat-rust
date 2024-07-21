@@ -1,0 +1,11 @@
+Kernel IP routing table
+Destination     Gateway         Genmask         Flags Metric Ref    Use Iface
+default         _gateway        0.0.0.0         UG    50     0        0 tun0
+default         _gateway        0.0.0.0         UG    600    0        0 wlo1
+10.96.0.0       0.0.0.0         255.255.0.0     U     50     0        0 tun0
+link-local      0.0.0.0         255.255.0.0     U     1000   0        0 wlo1
+172.17.0.0      0.0.0.0         255.255.0.0     U     0      0        0 docker0
+185-177-126-132 _gateway        255.255.255.255 UGH   50     0        0 wlo1
+192.168.122.0   0.0.0.0         255.255.255.0   U     0      0        0 virbr0
+192.168.178.0   0.0.0.0         255.255.255.0   U     600    0        0 wlo1
+_gateway        0.0.0.0         255.255.255.255 UH    50     0        0 wlo1
