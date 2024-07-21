@@ -206,7 +206,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         loop {
             let n = tun.send(&packet).await?;
             println!("send {n} bytes!");
-            thread::sleep(Duration::from_millis(100));
+            thread::sleep(Duration::from_millis(1000));
         }
     } else {
         let builder =
