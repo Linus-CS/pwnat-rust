@@ -16,6 +16,7 @@ fn setup_iface() -> Result<Tun, Box<dyn Error>> {
         .name(tun_name)
         .address(Ipv4Addr::new(10, 0, 0, 1))
         .netmask(Ipv4Addr::new(255, 255, 255, 0))
+        .packet_info(false)
         .up()
         .try_build()?;
 
@@ -201,11 +202,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         builder1.write(&mut packet, &inner).unwrap();
 
         println!("packet \n{packet:?}");
-        loop {
-            let n = tun.send(&packet).await?;
-            println!("send {n} bytes!");
-            thread::sleep(Duration::from_millis(100));
-        }
+        let n = tun.send(&packet).await?;
+        println!("send {n} bytes!");
     } else {
         let builder =
             PacketBuilder::ipv4([10, 0, 0, 2], [3, 3, 3, 3], 64).icmpv4_echo_request(0, 0);
@@ -213,9 +211,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         builder.write(&mut packet, &[]).unwrap();
 
         println!("packet \n{packet:?}");
-        let mut buffer = [0; 1500];
         let n = tun.send(&packet).await?;
         println!("send {n} bytes!");
+
+        let mut buffer = [0; 1500];
         let _ = tun.recv(&mut buffer).await.unwrap();
         let n = tun.recv(&mut buffer).await.unwrap();
         println!("{:?}", &buffer[..n]);
