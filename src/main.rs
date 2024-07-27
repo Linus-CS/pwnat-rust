@@ -195,7 +195,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     if args.is_client {
         let remote = args.remote.expect("Checked during parsing!");
-        let builder1 = PacketBuilder::ipv4(local, remote, u8::MAX).icmpv4_raw(11, 0, [0; 4]);
+        let builder1 =
+            PacketBuilder::ipv4([10, 0, 0, 2], remote, u8::MAX).icmpv4_raw(11, 0, [0; 4]);
         let builder2 = PacketBuilder::ipv4(remote, [3, 3, 3, 3], 1).icmpv4_echo_request(0, 0);
         let mut packet = Vec::<u8>::with_capacity(builder1.size(builder2.size(0)));
         let mut inner = Vec::<u8>::with_capacity(builder2.size(0));
@@ -206,8 +207,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let n = tun.send(&packet).await?;
         println!("send {n} bytes!");
     } else {
-        let builder =
-            PacketBuilder::ipv4([10, 0, 0, 2], [3, 3, 3, 3], u8::MAX).icmpv4_echo_request(0, 0);
+        let builder = PacketBuilder::ipv4([10, 0, 0, 2], [3, 3, 3, 3], 6).icmpv4_echo_request(0, 0);
         let mut packet = Vec::<u8>::with_capacity(builder.size(0));
         builder.write(&mut packet, &[]).unwrap();
 
@@ -246,3 +246,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 //                                                                                                                                                ^      ^----^
 //                                                                                                                                               TTL  Header Checksum
 //[69, 0, 0, 28, 0, 0, 64, 0, 1, 1, 251, 234, 192, 168, 178, 21, 79, 216, 187, 96, 11, 0, 244, 255, 0, 0, 0, 0]
+
+// 4500 0038 0100 0000 4001 d55b c35a d5d6
+// 4fd8 bb60 0b00 f4ff 0000 0000 4500 001c
+// 0100 0000 0101 a7a3 4fd8 bb60 0303 0303
+// 0800 f7ff 0000 0000
