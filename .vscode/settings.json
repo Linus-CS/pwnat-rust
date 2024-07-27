@@ -1,0 +1,8 @@
+{
+    "files.associations": {
+        "*.rmd": "markdown",
+        "stdint.h": "c",
+        "cstdint": "c",
+        "stdint-gcc.h": "c"
+    }
+}

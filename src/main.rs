@@ -16,7 +16,6 @@ fn setup_iface() -> Result<Tun, Box<dyn Error>> {
         .name(tun_name)
         .address(Ipv4Addr::new(10, 0, 0, 1))
         .netmask(Ipv4Addr::new(255, 255, 255, 0))
-        .packet_info(false)
         .up()
         .try_build()?;
 
@@ -200,7 +199,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let mut inner = Vec::<u8>::with_capacity(builder2.size(0));
         builder2.write(&mut inner, &[]).unwrap();
         builder1.write(&mut packet, &inner).unwrap();
-        packet[6] = 0;
 
         println!("packet \n{packet:?}");
         loop {
@@ -218,12 +216,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let mut buffer = [0; 1500];
         let n = tun.send(&packet).await?;
         println!("send {n} bytes!");
-        for _ in 0..10000 {
-            let n = tun.send(&packet).await?;
-            println!("send {n} bytes!");
-            // let n = tun.recv(&mut buffer).await.unwrap();
-            // println!("{:?}", &buffer[..n]);
-        }
+        let _ = tun.recv(&mut buffer).await.unwrap();
+        let n = tun.recv(&mut buffer).await.unwrap();
+        println!("{:?}", &buffer[..n]);
     };
 
     remove_iptable_entries()?;
