@@ -5,6 +5,7 @@ use std::{
     error::Error,
     net::Ipv4Addr,
     process::Command,
+    u8,
 };
 use tokio_tun::Tun;
 
@@ -218,7 +219,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let n = tun.send(&packet).await?;
         println!("send {n} bytes!");
     } else {
-        let builder = PacketBuilder::ipv4([10, 0, 0, 2], [3, 3, 3, 3], 6).icmpv4_echo_request(0, 0);
+        let builder =
+            PacketBuilder::ipv4([10, 0, 0, 2], [3, 3, 3, 3], u8::MAX).icmpv4_echo_request(0, 0);
         let mut packet = Vec::<u8>::with_capacity(builder.size(0));
         builder.write(&mut packet, &[]).unwrap();
 
