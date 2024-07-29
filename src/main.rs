@@ -218,6 +218,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         println!("packet \n{packet:?}");
         let n = tun.send(&packet).await?;
         println!("send {n} bytes!");
+        let mut buffer = [0; 1500];
+        let n = tun.recv(&mut buffer).await.unwrap();
+        println!("{:?}", &buffer[..n]);
     } else {
         let builder =
             PacketBuilder::ipv4([10, 0, 0, 2], [3, 3, 3, 3], u8::MAX).icmpv4_echo_request(0, 0);
