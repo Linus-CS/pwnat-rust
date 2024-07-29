@@ -219,6 +219,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let n = tun.send(&packet).await?;
         println!("send {n} bytes!");
         let mut buffer = [0; 1500];
+        let _ = tun.recv(&mut buffer).await.unwrap();
         let n = tun.recv(&mut buffer).await.unwrap();
         println!("{:?}", &buffer[..n]);
     } else {
