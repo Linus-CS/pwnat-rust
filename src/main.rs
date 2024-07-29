@@ -1,13 +1,10 @@
 use etherparse::PacketBuilder;
-use local_ip_address::local_ip;
+use local_ip_address::{list_afinet_netifas, local_ip};
 use std::{
     env::{self},
     error::Error,
-    net::{IpAddr, Ipv4Addr},
+    net::Ipv4Addr,
     process::Command,
-    thread,
-    time::Duration,
-    u8,
 };
 use tokio_tun::Tun;
 
@@ -24,14 +21,14 @@ fn setup_iface() -> Result<Tun, Box<dyn Error>> {
     Ok(tun)
 }
 
-fn setup_iptable_entries() -> Result<(), Box<dyn Error>> {
+fn setup_iptable_entries(interface: &str) -> Result<(), Box<dyn Error>> {
     Command::new("iptables")
         .arg("-A")
         .arg("FORWARD")
         .arg("-s")
         .arg("10.0.0.0/24")
         .arg("-o")
-        .arg("wlo1")
+        .arg(interface)
         .arg("-j")
         .arg("ACCEPT")
         .status()?;
@@ -40,7 +37,7 @@ fn setup_iptable_entries() -> Result<(), Box<dyn Error>> {
         .arg("-A")
         .arg("FORWARD")
         .arg("-i")
-        .arg("wlo1")
+        .arg(interface)
         .arg("-d")
         .arg("10.0.0.0/24")
         .arg("-m")
@@ -59,7 +56,7 @@ fn setup_iptable_entries() -> Result<(), Box<dyn Error>> {
         .arg("-s")
         .arg("10.0.0.0/24")
         .arg("-o")
-        .arg("wlo1")
+        .arg(interface)
         .arg("-j")
         .arg("MASQUERADE")
         .status()?;
@@ -67,14 +64,14 @@ fn setup_iptable_entries() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn remove_iptable_entries() -> Result<(), Box<dyn Error>> {
+fn remove_iptable_entries(interface: &str) -> Result<(), Box<dyn Error>> {
     Command::new("iptables")
         .arg("-D")
         .arg("FORWARD")
         .arg("-s")
         .arg("10.0.0.0/24")
         .arg("-o")
-        .arg("wlo1")
+        .arg(interface)
         .arg("-j")
         .arg("ACCEPT")
         .status()?;
@@ -83,7 +80,7 @@ fn remove_iptable_entries() -> Result<(), Box<dyn Error>> {
         .arg("-D")
         .arg("FORWARD")
         .arg("-i")
-        .arg("wlo1")
+        .arg(interface)
         .arg("-d")
         .arg("10.0.0.0/24")
         .arg("-m")
@@ -102,12 +99,23 @@ fn remove_iptable_entries() -> Result<(), Box<dyn Error>> {
         .arg("-s")
         .arg("10.0.0.0/24")
         .arg("-o")
-        .arg("wlo1")
+        .arg(interface)
         .arg("-j")
         .arg("MASQUERADE")
         .status()?;
 
     Ok(())
+}
+
+fn get_interface() -> Result<String, Box<dyn Error>> {
+    let interfaces = list_afinet_netifas()?;
+    let local = local_ip()?;
+
+    Ok(interfaces
+        .iter()
+        .find(|x| x.1 == local)
+        .map(|x| x.0.clone())
+        .unwrap())
 }
 
 struct CmdArguments {
@@ -157,41 +165,44 @@ impl TryFrom<Vec<String>> for CmdArguments {
     }
 }
 
+impl CmdArguments {
+    fn parse(args: Vec<String>) -> Option<Self> {
+        match CmdArguments::try_from(args) {
+            Ok(value) => Some(value),
+            Err(e) => {
+                match e {
+                    ParsingError::IPv4Parsing => println!(
+                        "Could not parse the provided ip use a.b.c.d with a-d between 0 and 255"
+                    ),
+                    ParsingError::UnsupportedArgument(arg) => {
+                        println!("Unsupported argument: {arg}")
+                    }
+
+                    ParsingError::MissingRemote => println!(
+                        "Client needs to provide remote ip. Use --remote to set remote ip address."
+                    ),
+                };
+
+                None
+            }
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().collect();
-    let args = match CmdArguments::try_from(args) {
-        Ok(value) => Some(value),
-        Err(e) => {
-            match e {
-                ParsingError::IPv4Parsing => println!(
-                    "Could not parse the provided ip use a.b.c.d with a-d between 0 and 255"
-                ),
-                ParsingError::UnsupportedArgument(arg) => {
-                    println!("Unsupported argument: {arg}")
-                }
-
-                ParsingError::MissingRemote => println!(
-                    "Client needs to provide remote ip. Use --remote to set remote ip address."
-                ),
-            };
-
-            None
-        }
-    };
-
+    let args = CmdArguments::parse(args);
     if args.is_none() {
         return Ok(());
     }
+
+    let correct_interface = get_interface()?;
+
     let args = args.expect("Errors where already handled!");
 
     let tun = setup_iface()?;
-    setup_iptable_entries()?;
-    let local = if let Ok(IpAddr::V4(ipv4)) = local_ip() {
-        ipv4.octets()
-    } else {
-        return Ok(());
-    };
+    setup_iptable_entries(&correct_interface)?;
 
     if args.is_client {
         let remote = args.remote.expect("Checked during parsing!");
@@ -221,7 +232,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         println!("{:?}", &buffer[..n]);
     };
 
-    remove_iptable_entries()?;
+    remove_iptable_entries(&correct_interface)?;
 
     Ok(())
 }
@@ -247,7 +258,4 @@ async fn main() -> Result<(), Box<dyn Error>> {
 //                                                                                                                                               TTL  Header Checksum
 //[69, 0, 0, 28, 0, 0, 64, 0, 1, 1, 251, 234, 192, 168, 178, 21, 79, 216, 187, 96, 11, 0, 244, 255, 0, 0, 0, 0]
 
-// 4500 0038 0100 0000 4001 d55b c35a d5d6
-// 4fd8 bb60 0b00 f4ff 0000 0000 4500 001c
-// 0100 0000 0101 a7a3 4fd8 bb60 0303 0303
-// 0800 f7ff 0000 0000
+// iptable entries need to be changed not use wlo1 but correct interface
