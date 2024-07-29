@@ -115,7 +115,7 @@ fn get_interface() -> Result<String, Box<dyn Error>> {
     Ok(interfaces
         .iter()
         .find(|x| x.1 == local)
-        .map(|x| x.0.clone())
+        .map(|x| x.0.split(':').next().unwrap().to_owned())
         .unwrap())
 }
 
